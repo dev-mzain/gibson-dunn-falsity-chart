@@ -12,7 +12,16 @@ export interface ProcessingResult {
   final_chart: string;
   iterations: number;
   history: IterationData[];
-  status: 'approved' | 'max_iterations_reached';
+  status: 'approved' | 'max_iterations_reached' | 'reviewer_failed' | 'fixer_failed';
+}
+
+export interface ProgressUpdate {
+  type: 'progress' | 'complete' | 'error';
+  step?: string;
+  iteration?: number;
+  max_iterations?: number;
+  message?: string;
+  result?: ProcessingResult;
 }
 
 export interface UploadResponse {
@@ -66,6 +75,72 @@ export async function processComplaint(file: File): Promise<ProcessingResult> {
   }
 
   return response.json();
+}
+
+/**
+ * Process a complaint file with real-time progress updates via SSE
+ */
+export async function processComplaintWithProgress(
+  file: File,
+  onProgress: (update: ProgressUpdate) => void
+): Promise<ProcessingResult> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(`${API_BASE_URL}/api/process-stream`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Processing failed' }));
+    throw new APIError(response.status, error.detail || 'Processing failed');
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new APIError(500, 'Failed to get response stream');
+  }
+
+  const decoder = new TextDecoder();
+  let result: ProcessingResult | null = null;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      
+      if (done) break;
+      
+      const chunk = decoder.decode(value, { stream: true });
+      const lines = chunk.split('\n');
+      
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6)) as ProgressUpdate;
+            onProgress(data);
+            
+            if (data.type === 'complete' && data.result) {
+              result = data.result;
+            } else if (data.type === 'error') {
+              throw new APIError(500, data.message || 'Processing failed');
+            }
+          } catch (e) {
+            if (e instanceof APIError) throw e;
+            // Ignore JSON parse errors for incomplete chunks
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (!result) {
+    throw new APIError(500, 'No result received from server');
+  }
+
+  return result;
 }
 
 /**

@@ -3,7 +3,8 @@ from agents.reviewer_agent import ReviewerAgent
 from agents.fixer_agent import FixerAgent
 from utils.logger import RunLogger
 from config import config
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Callable, AsyncGenerator
+import asyncio
 
 class Orchestrator:
     """
@@ -14,12 +15,18 @@ class Orchestrator:
     4. Repeat until no issues or max iterations reached
     """
     
-    def __init__(self):
+    def __init__(self, progress_callback: Optional[Callable[[str, int, int, str], None]] = None):
         self.generator = GeneratorAgent()
         self.reviewer = ReviewerAgent()
         self.fixer = FixerAgent()
         self.max_iterations = config.MAX_ITERATIONS
         self.logger = RunLogger()
+        self.progress_callback = progress_callback
+    
+    def _emit_progress(self, step: str, iteration: int, max_iterations: int, message: str):
+        """Emit progress update if callback is set."""
+        if self.progress_callback:
+            self.progress_callback(step, iteration, max_iterations, message)
     
     def process_complaint(self, complaint_text: str) -> Dict:
         """
@@ -53,24 +60,31 @@ class Orchestrator:
         try:
             for iteration in range(1, self.max_iterations + 1):
                 self.logger.log_iteration_start(iteration, self.max_iterations)
+                self._emit_progress("iteration_start", iteration, self.max_iterations, f"Starting iteration {iteration}")
                 
                 # Step 1: Generate or use existing chart
                 if iteration == 1:
                     self.logger.log_info("Step 1: Generating initial chart...")
+                    self._emit_progress("generating", iteration, self.max_iterations, "Agent 1: Generating initial falsity chart...")
                     try:
                         current_chart = self.generator.generate_chart(complaint_text, iteration)
+                        self._emit_progress("generated", iteration, self.max_iterations, "Chart generation complete")
                     except Exception as e:
                         self.logger.log_error(f"Generator failed: {str(e)}")
+                        self._emit_progress("error", iteration, self.max_iterations, f"Generator failed: {str(e)}")
                         raise  # Generator failure is critical - we can't continue without a chart
                 
                 # Step 2: Review the chart
                 self.logger.log_info("Step 2: Reviewing chart...")
+                self._emit_progress("reviewing", iteration, self.max_iterations, "Agent 2: Reviewing chart for accuracy...")
                 try:
                     issues = self.reviewer.review_chart(complaint_text, current_chart, iteration)
+                    self._emit_progress("reviewed", iteration, self.max_iterations, "Review complete")
                 except Exception as e:
                     # Reviewer failed (likely safety filter) - return current chart as final
                     self.logger.log_warning(f"Reviewer failed: {str(e)}")
                     self.logger.log_warning("Returning chart without review due to reviewer failure")
+                    self._emit_progress("reviewer_failed", iteration, self.max_iterations, "Reviewer unavailable - returning chart")
                     
                     # Store iteration data with error note
                     iteration_data = {
@@ -106,6 +120,7 @@ class Orchestrator:
                 # Step 3: Check if we're done
                 if is_approved:
                     self.logger.log_final_result("approved", iteration, current_chart)
+                    self._emit_progress("complete", iteration, self.max_iterations, "Chart approved!")
                     log_file = self.logger.end_run()
                     return {
                         "final_chart": current_chart,
@@ -118,12 +133,15 @@ class Orchestrator:
                 # Step 4: Fix the chart if not on last iteration
                 if iteration < self.max_iterations:
                     self.logger.log_info("Step 3: Fixing chart based on issues...")
+                    self._emit_progress("fixing", iteration, self.max_iterations, "Agent 3: Fixing identified issues...")
                     try:
                         current_chart = self.fixer.fix_chart(complaint_text, current_chart, issues, iteration)
+                        self._emit_progress("fixed", iteration, self.max_iterations, "Fixes applied")
                     except Exception as e:
                         # Fixer failed - return current chart as final
                         self.logger.log_warning(f"Fixer failed: {str(e)}")
                         self.logger.log_warning("Returning chart without fixes due to fixer failure")
+                        self._emit_progress("fixer_failed", iteration, self.max_iterations, "Fixer unavailable - returning chart")
                         
                         self.logger.log_final_result("fixer_failed", iteration, current_chart)
                         log_file = self.logger.end_run()
@@ -137,9 +155,11 @@ class Orchestrator:
                         }
                 else:
                     self.logger.log_warning("Max iterations reached - returning best effort chart")
+                    self._emit_progress("max_iterations", iteration, self.max_iterations, "Max iterations reached")
             
             # Return final chart even if not fully approved
             self.logger.log_final_result("max_iterations_reached", self.max_iterations, current_chart)
+            self._emit_progress("complete", self.max_iterations, self.max_iterations, "Processing complete")
             log_file = self.logger.end_run()
             
             return {
@@ -152,6 +172,7 @@ class Orchestrator:
             
         except Exception as e:
             self.logger.log_error(f"Processing failed: {str(e)}")
+            self._emit_progress("error", 0, self.max_iterations, f"Processing failed: {str(e)}")
             log_file = self.logger.end_run()
             raise
     

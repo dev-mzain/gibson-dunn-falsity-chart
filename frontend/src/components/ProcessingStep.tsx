@@ -1,21 +1,29 @@
 'use client';
 
-import { ScanLine, Quote, Users, FileSearch, Table2, Check, AlertCircle } from 'lucide-react';
+import { ScanLine, Quote, Users, FileSearch, Table2, Check, AlertCircle, Loader2 } from 'lucide-react';
 import { useEffect, useState, useRef } from 'react';
-import { ProcessingStepItem, ProcessingResult } from '@/types';
-import { processComplaint, APIError } from '@/lib/api';
+import { ProcessingResult } from '@/types';
+import { processComplaintWithProgress, ProgressUpdate, APIError } from '@/lib/api';
 import { getStoredFile } from '@/lib/storage';
 
-const processingSteps: ProcessingStepItem[] = [
-  { id: 'proc-step-1', icon: 'scan-line', text: 'Agent 1: Generating initial falsity chart', delay: 1000 },
-  { id: 'proc-step-2', icon: 'quote', text: 'Agent 2: Reviewing chart for accuracy', delay: 2000 },
-  { id: 'proc-step-3', icon: 'users', text: 'Agent 3: Fixing identified issues', delay: 3000 },
-  { id: 'proc-step-4', icon: 'file-search', text: 'Running quality assurance checks', delay: 4000 },
-  { id: 'proc-step-5', icon: 'table-2', text: 'Finalizing falsity chart', delay: 5000 },
-];
+interface ProcessingStepProps {
+  onComplete: (result: ProcessingResult) => void;
+}
 
-const getIcon = (iconName: string) => {
-  const iconProps = { className: 'h-3 w-3', strokeWidth: 1.5 };
+type StepStatus = 'pending' | 'active' | 'completed' | 'error';
+
+interface Step {
+  id: string;
+  icon: string;
+  text: string;
+  status: StepStatus;
+}
+
+const getIcon = (iconName: string, isActive: boolean = false) => {
+  const iconProps = { 
+    className: `h-3 w-3 ${isActive ? 'animate-pulse' : ''}`, 
+    strokeWidth: 1.5 
+  };
   switch (iconName) {
     case 'scan-line':
       return <ScanLine {...iconProps} />;
@@ -27,24 +35,74 @@ const getIcon = (iconName: string) => {
       return <FileSearch {...iconProps} />;
     case 'table-2':
       return <Table2 {...iconProps} />;
+    case 'loader':
+      return <Loader2 {...iconProps} className="h-3 w-3 animate-spin" />;
     default:
       return null;
   }
 };
 
-interface ProcessingStepProps {
-  onComplete: (result: ProcessingResult) => void;
-}
-
 export default function ProcessingStep({ onComplete }: ProcessingStepProps) {
-  const [progress, setProgress] = useState(0);
   const [timer, setTimer] = useState(0);
-  const [completedSteps, setCompletedSteps] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [currentIteration, setCurrentIteration] = useState(1);
+  const [maxIterations, setMaxIterations] = useState(3);
+  const [currentMessage, setCurrentMessage] = useState('Initializing...');
+  const [steps, setSteps] = useState<Step[]>([
+    { id: 'generating', icon: 'scan-line', text: 'Agent 1: Generating initial falsity chart', status: 'pending' },
+    { id: 'reviewing', icon: 'quote', text: 'Agent 2: Reviewing chart for accuracy', status: 'pending' },
+    { id: 'fixing', icon: 'users', text: 'Agent 3: Fixing identified issues', status: 'pending' },
+    { id: 'finalizing', icon: 'table-2', text: 'Finalizing falsity chart', status: 'pending' },
+  ]);
   
   // Ref to prevent double API calls in React StrictMode
   const hasStartedProcessing = useRef(false);
+
+  const updateStepStatus = (stepId: string, status: StepStatus) => {
+    setSteps(prev => prev.map(step => 
+      step.id === stepId ? { ...step, status } : step
+    ));
+  };
+
+  const handleProgressUpdate = (update: ProgressUpdate) => {
+    if (update.iteration) setCurrentIteration(update.iteration);
+    if (update.max_iterations) setMaxIterations(update.max_iterations);
+    if (update.message) setCurrentMessage(update.message);
+
+    // Map backend steps to UI steps
+    switch (update.step) {
+      case 'generating':
+        updateStepStatus('generating', 'active');
+        break;
+      case 'generated':
+        updateStepStatus('generating', 'completed');
+        break;
+      case 'reviewing':
+        updateStepStatus('reviewing', 'active');
+        break;
+      case 'reviewed':
+        updateStepStatus('reviewing', 'completed');
+        break;
+      case 'fixing':
+        updateStepStatus('fixing', 'active');
+        break;
+      case 'fixed':
+        updateStepStatus('fixing', 'completed');
+        break;
+      case 'complete':
+      case 'max_iterations':
+      case 'reviewer_failed':
+      case 'fixer_failed':
+        updateStepStatus('finalizing', 'completed');
+        break;
+      case 'error':
+        // Mark current active step as error
+        setSteps(prev => prev.map(step => 
+          step.status === 'active' ? { ...step, status: 'error' } : step
+        ));
+        break;
+    }
+  };
 
   useEffect(() => {
     // Prevent double execution in React StrictMode
@@ -64,27 +122,19 @@ export default function ProcessingStep({ onComplete }: ProcessingStepProps) {
           return;
         }
 
-        // Start progress bar
-        setProgress(10);
-
         // Start timer
         timerInterval = setInterval(() => {
           setTimer((prev) => prev + 1);
         }, 1000);
 
-        // Animate steps as processing happens
-        processingSteps.forEach((step, index) => {
-          setTimeout(() => {
-            setCompletedSteps((prev) => new Set([...prev, step.id]));
-            setProgress(20 + (index + 1) * 15);
-          }, step.delay);
-        });
+        setCurrentMessage('Starting processing...');
 
-        // Process the complaint
-        const result = await processComplaint(file);
+        // Process with real-time progress updates
+        const result = await processComplaintWithProgress(file, handleProgressUpdate);
         
-        setCurrentIteration(result.iterations);
-        setProgress(100);
+        // Mark finalizing as complete
+        updateStepStatus('finalizing', 'completed');
+        setCurrentMessage('Processing complete!');
 
         // Wait a moment before completing
         setTimeout(() => {
@@ -116,6 +166,11 @@ export default function ProcessingStep({ onComplete }: ProcessingStepProps) {
     const secs = (seconds % 60).toString().padStart(2, '0');
     return `${mins}:${secs}`;
   };
+
+  // Calculate progress based on completed steps
+  const completedCount = steps.filter(s => s.status === 'completed').length;
+  const activeCount = steps.filter(s => s.status === 'active').length;
+  const progress = Math.round(((completedCount + activeCount * 0.5) / steps.length) * 100);
 
   if (error) {
     return (
@@ -153,39 +208,56 @@ export default function ProcessingStep({ onComplete }: ProcessingStepProps) {
           </span>
         </div>
         
-        <p className="text-xs text-gray-500 mb-6">
-          Iteration {currentIteration} of 3 (max)
+        <p className="text-xs text-gray-500 mb-2">
+          Iteration {currentIteration} of {maxIterations} (max)
+        </p>
+        
+        <p className="text-xs text-blue-600 mb-6 font-medium">
+          {currentMessage}
         </p>
 
         {/* Progress Bar */}
         <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden mb-8">
           <div
-            className="h-full bg-gray-900 rounded-full loading-bar-fill"
+            className="h-full bg-gray-900 rounded-full transition-all duration-500 ease-out"
             style={{ width: `${progress}%` }}
           ></div>
         </div>
 
         {/* Step List */}
         <div className="space-y-4">
-          {processingSteps.map((step) => {
-            const isCompleted = completedSteps.has(step.id);
+          {steps.map((step) => {
+            const isCompleted = step.status === 'completed';
+            const isActive = step.status === 'active';
+            const isError = step.status === 'error';
+            
             return (
               <div key={step.id} className="flex items-center gap-4 group">
                 <div
                   className={`h-6 w-6 rounded-full border flex items-center justify-center flex-shrink-0 transition-colors duration-300 ${
                     isCompleted
                       ? 'bg-gray-900 border-gray-900'
+                      : isActive
+                      ? 'bg-blue-500 border-blue-500'
+                      : isError
+                      ? 'bg-red-500 border-red-500'
                       : 'border-gray-200 bg-gray-50'
                   }`}
                 >
-                  <div className={isCompleted ? 'text-white' : 'text-gray-400'}>
-                    {getIcon(step.icon)}
+                  <div className={isCompleted || isActive || isError ? 'text-white' : 'text-gray-400'}>
+                    {isActive ? getIcon('loader', true) : getIcon(step.icon)}
                   </div>
                 </div>
                 <div className="flex-1">
                   <p
                     className={`text-sm font-medium transition-colors duration-300 ${
-                      isCompleted ? 'text-gray-900' : 'text-gray-400'
+                      isCompleted
+                        ? 'text-gray-900'
+                        : isActive
+                        ? 'text-blue-600'
+                        : isError
+                        ? 'text-red-600'
+                        : 'text-gray-400'
                     }`}
                   >
                     {step.text}
