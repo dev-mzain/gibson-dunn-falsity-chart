@@ -83,6 +83,24 @@ class BaseAgent:
             
             duration = time.time() - start_time
             
+            # Check if response has valid parts
+            if not response.parts:
+                # Log the finish reason for debugging
+                finish_reason = response.candidates[0].finish_reason if response.candidates else "UNKNOWN"
+                safety_ratings = response.candidates[0].safety_ratings if response.candidates else []
+                
+                error_details = f"Response blocked. Finish reason: {finish_reason}"
+                if safety_ratings:
+                    error_details += f"\nSafety ratings: {safety_ratings}"
+                
+                self._log("error", f"[{self.agent_name}] {error_details}")
+                
+                # Try to get any available text from prompt_feedback
+                if hasattr(response, 'prompt_feedback'):
+                    error_details += f"\nPrompt feedback: {response.prompt_feedback}"
+                
+                raise Exception(f"Gemini response blocked or empty. {error_details}")
+            
             # Log output
             if self.logger:
                 self.logger.log_agent_output(self.agent_name, response.text)
