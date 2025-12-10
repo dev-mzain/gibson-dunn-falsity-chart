@@ -1,9 +1,9 @@
 'use client';
 
-import { ScanLine, Quote, Users, FileSearch, Table2, Check, AlertCircle, Loader2 } from 'lucide-react';
+import { ScanLine, Quote, Users, Table2, Check, AlertCircle, Loader2 } from 'lucide-react';
 import { useEffect, useState, useRef } from 'react';
 import { ProcessingResult } from '@/types';
-import { processComplaintWithProgress, ProgressUpdate, APIError } from '@/lib/api';
+import { processComplaint, APIError } from '@/lib/api';
 import { getStoredFile } from '@/lib/storage';
 
 interface ProcessingStepProps {
@@ -17,12 +17,13 @@ interface Step {
   icon: string;
   text: string;
   status: StepStatus;
+  estimatedDuration: number; // seconds
 }
 
 const getIcon = (iconName: string, isActive: boolean = false) => {
-  const iconProps = { 
-    className: `h-3 w-3 ${isActive ? 'animate-pulse' : ''}`, 
-    strokeWidth: 1.5 
+  const iconProps = {
+    className: `h-3 w-3 ${isActive ? 'animate-pulse' : ''}`,
+    strokeWidth: 1.5
   };
   switch (iconName) {
     case 'scan-line':
@@ -31,8 +32,6 @@ const getIcon = (iconName: string, isActive: boolean = false) => {
       return <Quote {...iconProps} />;
     case 'users':
       return <Users {...iconProps} />;
-    case 'file-search':
-      return <FileSearch {...iconProps} />;
     case 'table-2':
       return <Table2 {...iconProps} />;
     case 'loader':
@@ -42,67 +41,61 @@ const getIcon = (iconName: string, isActive: boolean = false) => {
   }
 };
 
+// Estimated step durations based on typical processing times
+const STEP_DURATIONS = {
+  generating: 60,  // ~60 seconds for chart generation
+  reviewing: 45,   // ~45 seconds for review
+  fixing: 30,      // ~30 seconds for fixes (may not happen)
+  finalizing: 5,   // ~5 seconds for finalization
+};
+
 export default function ProcessingStep({ onComplete }: ProcessingStepProps) {
   const [timer, setTimer] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [currentIteration, setCurrentIteration] = useState(1);
-  const [maxIterations, setMaxIterations] = useState(3);
   const [currentMessage, setCurrentMessage] = useState('Initializing...');
+  const [isProcessingComplete, setIsProcessingComplete] = useState(false);
   const [steps, setSteps] = useState<Step[]>([
-    { id: 'generating', icon: 'scan-line', text: 'Agent 1: Generating initial falsity chart', status: 'pending' },
-    { id: 'reviewing', icon: 'quote', text: 'Agent 2: Reviewing chart for accuracy', status: 'pending' },
-    { id: 'fixing', icon: 'users', text: 'Agent 3: Fixing identified issues', status: 'pending' },
-    { id: 'finalizing', icon: 'table-2', text: 'Finalizing falsity chart', status: 'pending' },
+    { id: 'generating', icon: 'scan-line', text: 'Agent 1: Generating initial falsity chart', status: 'pending', estimatedDuration: STEP_DURATIONS.generating },
+    { id: 'reviewing', icon: 'quote', text: 'Agent 2: Reviewing chart for accuracy', status: 'pending', estimatedDuration: STEP_DURATIONS.reviewing },
+    { id: 'fixing', icon: 'users', text: 'Agent 3: Fixing identified issues (if needed)', status: 'pending', estimatedDuration: STEP_DURATIONS.fixing },
+    { id: 'finalizing', icon: 'table-2', text: 'Finalizing falsity chart', status: 'pending', estimatedDuration: STEP_DURATIONS.finalizing },
   ]);
   
   // Ref to prevent double API calls in React StrictMode
   const hasStartedProcessing = useRef(false);
+  const resultRef = useRef<ProcessingResult | null>(null);
 
   const updateStepStatus = (stepId: string, status: StepStatus) => {
-    setSteps(prev => prev.map(step => 
+    setSteps(prev => prev.map(step =>
       step.id === stepId ? { ...step, status } : step
     ));
   };
 
-  const handleProgressUpdate = (update: ProgressUpdate) => {
-    if (update.iteration) setCurrentIteration(update.iteration);
-    if (update.max_iterations) setMaxIterations(update.max_iterations);
-    if (update.message) setCurrentMessage(update.message);
-
-    // Map backend steps to UI steps
-    switch (update.step) {
-      case 'generating':
-        updateStepStatus('generating', 'active');
-        break;
-      case 'generated':
-        updateStepStatus('generating', 'completed');
-        break;
-      case 'reviewing':
-        updateStepStatus('reviewing', 'active');
-        break;
-      case 'reviewed':
-        updateStepStatus('reviewing', 'completed');
-        break;
-      case 'fixing':
-        updateStepStatus('fixing', 'active');
-        break;
-      case 'fixed':
-        updateStepStatus('fixing', 'completed');
-        break;
-      case 'complete':
-      case 'max_iterations':
-      case 'reviewer_failed':
-      case 'fixer_failed':
-        updateStepStatus('finalizing', 'completed');
-        break;
-      case 'error':
-        // Mark current active step as error
-        setSteps(prev => prev.map(step => 
-          step.status === 'active' ? { ...step, status: 'error' } : step
-        ));
-        break;
+  // Simulate progress based on elapsed time
+  useEffect(() => {
+    if (isProcessingComplete) return;
+    
+    const totalEstimatedTime = STEP_DURATIONS.generating + STEP_DURATIONS.reviewing + STEP_DURATIONS.fixing + STEP_DURATIONS.finalizing;
+    
+    // Update step statuses based on elapsed time
+    if (timer < STEP_DURATIONS.generating) {
+      updateStepStatus('generating', 'active');
+      setCurrentMessage('Agent 1: Analyzing complaint and generating falsity chart...');
+    } else if (timer < STEP_DURATIONS.generating + STEP_DURATIONS.reviewing) {
+      updateStepStatus('generating', 'completed');
+      updateStepStatus('reviewing', 'active');
+      setCurrentMessage('Agent 2: Reviewing chart for accuracy and completeness...');
+    } else if (timer < STEP_DURATIONS.generating + STEP_DURATIONS.reviewing + STEP_DURATIONS.fixing) {
+      updateStepStatus('reviewing', 'completed');
+      updateStepStatus('fixing', 'active');
+      setCurrentMessage('Agent 3: Applying fixes based on review feedback...');
+    } else if (timer < totalEstimatedTime) {
+      updateStepStatus('fixing', 'completed');
+      updateStepStatus('finalizing', 'active');
+      setCurrentMessage('Finalizing and preparing results...');
     }
-  };
+    // After estimated time, keep showing finalizing as active until actual completion
+  }, [timer, isProcessingComplete]);
 
   useEffect(() => {
     // Prevent double execution in React StrictMode
@@ -129,11 +122,15 @@ export default function ProcessingStep({ onComplete }: ProcessingStepProps) {
 
         setCurrentMessage('Starting processing...');
 
-        // Process with real-time progress updates
-        const result = await processComplaintWithProgress(file, handleProgressUpdate);
+        // Process using regular endpoint (more reliable than SSE)
+        const result = await processComplaint(file);
+        resultRef.current = result;
         
-        // Mark finalizing as complete
-        updateStepStatus('finalizing', 'completed');
+        // Mark processing as complete
+        setIsProcessingComplete(true);
+        
+        // Mark all steps as complete
+        setSteps(prev => prev.map(step => ({ ...step, status: 'completed' as StepStatus })));
         setCurrentMessage('Processing complete!');
 
         // Wait a moment before completing
@@ -207,10 +204,6 @@ export default function ProcessingStep({ onComplete }: ProcessingStepProps) {
             {formatTime(timer)}
           </span>
         </div>
-        
-        <p className="text-xs text-gray-500 mb-2">
-          Iteration {currentIteration} of {maxIterations} (max)
-        </p>
         
         <p className="text-xs text-blue-600 mb-6 font-medium">
           {currentMessage}
