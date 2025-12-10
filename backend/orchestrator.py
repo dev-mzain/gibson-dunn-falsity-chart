@@ -57,11 +57,39 @@ class Orchestrator:
                 # Step 1: Generate or use existing chart
                 if iteration == 1:
                     self.logger.log_info("Step 1: Generating initial chart...")
-                    current_chart = self.generator.generate_chart(complaint_text, iteration)
+                    try:
+                        current_chart = self.generator.generate_chart(complaint_text, iteration)
+                    except Exception as e:
+                        self.logger.log_error(f"Generator failed: {str(e)}")
+                        raise  # Generator failure is critical - we can't continue without a chart
                 
                 # Step 2: Review the chart
                 self.logger.log_info("Step 2: Reviewing chart...")
-                issues = self.reviewer.review_chart(complaint_text, current_chart, iteration)
+                try:
+                    issues = self.reviewer.review_chart(complaint_text, current_chart, iteration)
+                except Exception as e:
+                    # Reviewer failed (likely safety filter) - return current chart as final
+                    self.logger.log_warning(f"Reviewer failed: {str(e)}")
+                    self.logger.log_warning("Returning chart without review due to reviewer failure")
+                    
+                    # Store iteration data with error note
+                    iteration_data = {
+                        "iteration": iteration,
+                        "chart": current_chart,
+                        "issues": f"Reviewer unavailable: {str(e)}"
+                    }
+                    history.append(iteration_data)
+                    
+                    self.logger.log_final_result("reviewer_failed", iteration, current_chart)
+                    log_file = self.logger.end_run()
+                    
+                    return {
+                        "final_chart": current_chart,
+                        "iterations": iteration,
+                        "history": history,
+                        "status": "reviewer_failed",
+                        "log_file": log_file
+                    }
                 
                 # Store iteration data
                 iteration_data = {
@@ -90,7 +118,23 @@ class Orchestrator:
                 # Step 4: Fix the chart if not on last iteration
                 if iteration < self.max_iterations:
                     self.logger.log_info("Step 3: Fixing chart based on issues...")
-                    current_chart = self.fixer.fix_chart(complaint_text, current_chart, issues, iteration)
+                    try:
+                        current_chart = self.fixer.fix_chart(complaint_text, current_chart, issues, iteration)
+                    except Exception as e:
+                        # Fixer failed - return current chart as final
+                        self.logger.log_warning(f"Fixer failed: {str(e)}")
+                        self.logger.log_warning("Returning chart without fixes due to fixer failure")
+                        
+                        self.logger.log_final_result("fixer_failed", iteration, current_chart)
+                        log_file = self.logger.end_run()
+                        
+                        return {
+                            "final_chart": current_chart,
+                            "iterations": iteration,
+                            "history": history,
+                            "status": "fixer_failed",
+                            "log_file": log_file
+                        }
                 else:
                     self.logger.log_warning("Max iterations reached - returning best effort chart")
             

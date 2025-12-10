@@ -28,5 +28,5 @@ export interface ProcessingResult {
   final_chart: string;
   iterations: number;
   history: IterationData[];
-  status: 'approved' | 'max_iterations_reached';
+  status: 'approved' | 'max_iterations_reached' | 'reviewer_failed' | 'fixer_failed';
 }

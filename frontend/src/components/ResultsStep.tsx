@@ -1,5 +1,8 @@
-import { FileText, Sheet, CheckCircle, AlertTriangle } from 'lucide-react';
+'use client';
+
+import { CheckCircle, AlertTriangle, Download } from 'lucide-react';
 import { AllegationRow, ProcessingResult } from '@/types';
+import { exportToPDF } from '@/lib/pdfExport';
 
 interface ResultsStepProps {
   allegations: AllegationRow[];
@@ -31,6 +34,11 @@ export default function ResultsStep({ allegations, processingResult }: ResultsSt
                 <CheckCircle className="h-3 w-3" />
                 Approved
               </span>
+            ) : processingResult?.status === 'reviewer_failed' || processingResult?.status === 'fixer_failed' ? (
+              <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 uppercase tracking-wide border border-blue-200 flex items-center gap-1">
+                <AlertTriangle className="h-3 w-3" />
+                {processingResult.status === 'reviewer_failed' ? 'Review Skipped' : 'Fix Skipped'}
+              </span>
             ) : (
               <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-700 uppercase tracking-wide border border-amber-200 flex items-center gap-1">
                 <AlertTriangle className="h-3 w-3" />
@@ -51,16 +59,12 @@ export default function ResultsStep({ allegations, processingResult }: ResultsSt
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm">
-            <FileText className="h-4 w-4 text-blue-600" />
-            Export to Word
-          </button>
-          <button className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm">
-            <Sheet className="h-4 w-4 text-emerald-600" />
-            Export to Excel
-          </button>
-          <button className="px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 shadow-sm transition-all">
-            Save to Matter
+          <button
+            onClick={() => exportToPDF(allegations, processingResult)}
+            className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm"
+          >
+            <Download className="h-4 w-4 text-red-600" />
+            Export to PDF
           </button>
         </div>
       </div>
