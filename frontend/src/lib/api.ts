@@ -104,30 +104,62 @@ export async function processComplaintWithProgress(
 
   const decoder = new TextDecoder();
   let result: ProcessingResult | null = null;
+  let buffer = ''; // Buffer for incomplete chunks
 
   try {
     while (true) {
       const { done, value } = await reader.read();
       
-      if (done) break;
-      
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n');
-      
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6)) as ProgressUpdate;
-            onProgress(data);
-            
-            if (data.type === 'complete' && data.result) {
-              result = data.result;
-            } else if (data.type === 'error') {
-              throw new APIError(500, data.message || 'Processing failed');
+      if (done) {
+        // Process any remaining data in buffer
+        if (buffer.trim()) {
+          const lines = buffer.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6)) as ProgressUpdate;
+                onProgress(data);
+                if (data.type === 'complete' && data.result) {
+                  result = data.result;
+                }
+              } catch {
+                // Ignore parse errors on final buffer
+              }
             }
-          } catch (e) {
-            if (e instanceof APIError) throw e;
-            // Ignore JSON parse errors for incomplete chunks
+          }
+        }
+        break;
+      }
+      
+      // Append new chunk to buffer
+      buffer += decoder.decode(value, { stream: true });
+      
+      // Process complete lines (ending with \n\n for SSE)
+      const parts = buffer.split('\n\n');
+      
+      // Keep the last part in buffer (might be incomplete)
+      buffer = parts.pop() || '';
+      
+      // Process complete messages
+      for (const part of parts) {
+        const lines = part.split('\n');
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const jsonStr = line.slice(6);
+              const data = JSON.parse(jsonStr) as ProgressUpdate;
+              onProgress(data);
+              
+              if (data.type === 'complete' && data.result) {
+                result = data.result;
+              } else if (data.type === 'error') {
+                throw new APIError(500, data.message || 'Processing failed');
+              }
+            } catch (e) {
+              if (e instanceof APIError) throw e;
+              // Log parse errors for debugging
+              console.warn('SSE parse error:', e, 'Line:', line);
+            }
           }
         }
       }
